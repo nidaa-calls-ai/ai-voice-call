@@ -62,6 +62,9 @@ function getSpeechRecognition(): (new () => SpeechRecognitionLike) | null {
 export default function PhonePage() {
   const [state, setState] = useState<PhoneState>('idle')
   const [connected, setConnected] = useState(false)
+  // heartbeat alive: the app can reach the server even without the realtime socket
+  // (polling mode — e.g. on Vercel where the socket mini-service cannot run)
+  const [hbOnline, setHbOnline] = useState(false)
   const [auth, setAuth] = useState<AuthSession | null>(null)
   const [authLoaded, setAuthLoaded] = useState(false)
   const [currentCall, setCurrentCall] = useState<CallData | null>(null)
@@ -261,6 +264,31 @@ export default function PhonePage() {
     }, 3000)
     return () => clearInterval(t)
   }, [connected, auth?.token])
+
+  // Heartbeat: tells the server "app open and able to ring" every 20s, even when
+  // the realtime socket is unavailable (polling mode — e.g. on Vercel). This is
+  // what makes the dashboard show the phone as متصل, and what lets createCall
+  // skip the Web Push when the app will ring by itself within seconds.
+  useEffect(() => {
+    if (!auth?.token) return
+    let alive = true
+    const ping = () => {
+      fetch('/api/phone/heartbeat', { method: 'POST', headers: authHeaders({ token: auth.token } as AuthSession) })
+        .then((r) => r.json())
+        .then((d) => {
+          if (alive) setHbOnline(!!d?.ok)
+        })
+        .catch(() => {
+          if (alive) setHbOnline(false)
+        })
+    }
+    ping()
+    const t = setInterval(ping, 20000)
+    return () => {
+      alive = false
+      clearInterval(t)
+    }
+  }, [auth?.token])
 
   // auto-scroll transcript
   useEffect(() => {
@@ -967,10 +995,10 @@ export default function PhonePage() {
           </div>
           <div className="flex items-center gap-2">
             <div
-              className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full ${connected ? 'bg-white/20' : 'bg-black/20'}`}
+              className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full ${(connected || hbOnline) ? 'bg-white/20' : 'bg-black/20'}`}
             >
-              {connected ? <Wifi className="w-3.5 h-3.5" /> : <WifiOff className="w-3.5 h-3.5" />}
-              {connected ? 'متصل' : 'غير متصل'}
+              {(connected || hbOnline) ? <Wifi className="w-3.5 h-3.5" /> : <WifiOff className="w-3.5 h-3.5" />}
+              {(connected || hbOnline) ? 'متصل' : 'غير متصل'}
             </div>
             <div className="flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1.5 rounded-full bg-white/15">
               <UserRound className="w-3.5 h-3.5" />
@@ -998,12 +1026,12 @@ export default function PhonePage() {
 
         <div className="bg-white border border-emerald-100 rounded-2xl p-5 shadow-sm space-y-3">
           <div className="flex items-center gap-3">
-            <div className={`w-11 h-11 rounded-xl flex items-center justify-center ${connected ? 'bg-emerald-100 text-emerald-700' : 'bg-zinc-100 text-zinc-400'}`}>
+            <div className={`w-11 h-11 rounded-xl flex items-center justify-center ${(connected || hbOnline) ? 'bg-emerald-100 text-emerald-700' : 'bg-zinc-100 text-zinc-400'}`}>
               <Phone className="w-5 h-5" />
             </div>
             <div className="flex-1">
-              <p className="font-bold text-[15px]">{connected ? 'جاهز لاستقبال المكالمات' : 'بيحاول يوصل بالسيرفر...'}</p>
-              <p className="text-xs text-zinc-500">{connected ? 'أول ما إيجنت يخلص مهمة هيرن عليك هنا فوراً' : 'شيك على النت أو افتح الصفحة تاني'}</p>
+              <p className="font-bold text-[15px]">{(connected || hbOnline) ? 'جاهز لاستقبال المكالمات' : 'بيحاول يوصل بالسيرفر...'}</p>
+              <p className="text-xs text-zinc-500">{(connected || hbOnline) ? 'أول ما إيجنت يخلص مهمة هيرن عليك هنا فوراً' : 'شيك على النت أو افتح الصفحة تاني'}</p>
             </div>
           </div>
 

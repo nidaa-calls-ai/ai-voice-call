@@ -1,6 +1,7 @@
 import { db } from '@/lib/db'
 import { getInternalSecret } from '@/lib/settings'
 import { sendPushToUser } from '@/lib/push'
+import { isPhoneActive } from '@/lib/presence'
 
 export type CallInput = {
   userId: string
@@ -135,8 +136,8 @@ export async function createCall(input: CallInput): Promise<CallRecord> {
   // Live ring when one of the user's phone apps is connected
   if (status.phoneOnline > 0) {
     await emitToRoom(pRoom, 'incoming-call', payload)
-  } else {
-    // App closed -> Web Push notification opens the ringing screen (user's devices only)
+  } else if (!(await isPhoneActive(input.userId))) {
+    // App closed/backgrounded -> Web Push notification opens the ringing screen
     const body = payload.summary || payload.result || payload.message || 'المهمة خلصت وتحتاج مراجعة'
     void sendPushToUser(input.userId, {
       callId: payload.id,
@@ -146,6 +147,9 @@ export async function createCall(input: CallInput): Promise<CallRecord> {
       urgency: payload.urgency,
     })
   }
+  // else: the phone app is open in polling mode (e.g. on Vercel, where the
+  // socket mini-service cannot run) — it rings within seconds via GET /api/calls,
+  // so no Web Push is needed (avoids a double notification).
 
   // Dashboard live feed + start the missed-call countdown
   await emitToRoom(dRoom, 'incoming-call', payload)

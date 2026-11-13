@@ -154,6 +154,17 @@ export default function Dashboard() {
     refreshConfig()
     refreshCalls()
 
+    // phone online status via heartbeat API (works on Vercel, where the socket
+    // mini-service doesn't run). The socket 'phone-online' handler below still
+    // overrides it instantly on the local setup.
+    const refreshPhoneStatus = () => {
+      fetch('/api/phone/status', { headers: authHeaders({ token } as AuthSession) })
+        .then((r) => r.json())
+        .then((d) => setPhoneOnline(!!d?.online))
+        .catch(() => {})
+    }
+    refreshPhoneStatus()
+
     // live feed over socket.io (per-account room dash:<userId>)
     // Optional: when NEXT_PUBLIC_SOCKET_URL is not set (e.g. Vercel serverless),
     // the dashboard relies on the /api/calls polling below instead.
@@ -194,8 +205,10 @@ export default function Dashboard() {
     }
 
     const poll = setInterval(refreshConfig, 15000)
+    const statusPoll = setInterval(refreshPhoneStatus, 20000)
     return () => {
       clearInterval(poll)
+      clearInterval(statusPoll)
       socketRef.current?.disconnect()
       socketRef.current = null
     }
