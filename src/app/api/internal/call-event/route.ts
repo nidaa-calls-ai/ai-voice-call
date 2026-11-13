@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { ensureDbReady } from '@/lib/db'
 import { updateCallFromEvent, CallEventType } from '@/lib/calls'
 import { getInternalSecret } from '@/lib/settings'
 
@@ -9,6 +10,7 @@ export const dynamic = 'force-dynamic'
  * declines / misses / ends a call. Protected by the shared internal secret.
  */
 export async function POST(req: NextRequest) {
+  await ensureDbReady() // keep the runtime DB in sync with prisma/schema.prisma
   const secret = req.headers.get('x-internal-secret')
   if (!secret || secret !== getInternalSecret()) {
     return NextResponse.json({ ok: false, error: 'Forbidden' }, { status: 403 })

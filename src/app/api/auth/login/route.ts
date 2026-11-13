@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { db } from '@/lib/db'
+import { db, ensureDbReady } from '@/lib/db'
 import { sanitizeUsername, toSafeUser, verifyPassword } from '@/lib/auth'
 
 export const dynamic = 'force-dynamic'
 
 /** Login with username + password -> the user's personal access token. */
 export async function POST(req: NextRequest) {
+  await ensureDbReady() // keep the runtime DB in sync with prisma/schema.prisma
   try {
     const body = (await req.json()) as { username?: string; password?: string }
     const username = sanitizeUsername(body.username || '')

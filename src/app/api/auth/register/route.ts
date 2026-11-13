@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { db } from '@/lib/db'
+import { db, ensureDbReady } from '@/lib/db'
 import { hashPassword, randomToken, sanitizeUsername, toSafeUser } from '@/lib/auth'
 import { claimLegacyGlobalFishConfig } from '@/lib/settings'
 
@@ -12,6 +12,7 @@ export const dynamic = 'force-dynamic'
  * pre-multi-user calls/push subscriptions (migration of the personal-app data).
  */
 export async function POST(req: NextRequest) {
+  await ensureDbReady() // create tables/columns on a fresh database before any insert
   try {
     const body = (await req.json()) as { username?: string; password?: string; display_name?: string }
     const username = sanitizeUsername(body.username || '')

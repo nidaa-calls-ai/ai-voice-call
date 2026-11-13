@@ -1,4 +1,4 @@
-import { db } from '@/lib/db'
+import { db, ensureDbReady } from '@/lib/db'
 import crypto from 'crypto'
 
 /**
@@ -47,6 +47,7 @@ export function sanitizeUsername(raw: string): string | null {
 
 /** Find the user that owns an access token (null when the token is unknown/revoked). */
 export async function getUserByToken(token: string): Promise<SafeUser | null> {
+  await ensureDbReady() // keep the runtime DB in sync with prisma/schema.prisma
   const clean = (token || '').trim()
   if (!clean) return null
   const user = await db.user.findUnique({ where: { accessToken: clean } })
