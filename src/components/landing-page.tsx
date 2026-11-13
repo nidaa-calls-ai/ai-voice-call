@@ -2,12 +2,13 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import Image from 'next/image'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { getAuth } from '@/lib/client-auth'
 import {
   Phone, PhoneCall, MessagesSquare, Brain, AudioLines, Puzzle, Activity,
-  BellRing, ShieldCheck, Smartphone, Youtube, Heart, Sparkles, UserRoundPlus,
+  BellRing, ShieldCheck, Smartphone, Youtube, Heart, Sparkles, UserRoundPlus, Github,
   Code2, Clock3, RefreshCw, Languages, ArrowLeft, ArrowRight, CheckCircle2,
   Globe, Mail, PlayCircle,
 } from 'lucide-react'
@@ -21,6 +22,8 @@ const YOUTUBE_URL = 'https://www.youtube.com/@NextGen_AI2023'
 const PAYPAL_DONATE_URL =
   'https://www.paypal.com/cgi-bin/webscr?cmd=_donations&business=hussainandshabaan%40gmail.com&currency_code=USD&item_name=%D8%AF%D8%B9%D9%85%20%D9%85%D8%B4%D8%B1%D9%88%D8%B9%20%D9%86%D8%AF%D8%A7%D8%A1'
 const PAYPAL_EMAIL = 'hussainandshabaan@gmail.com'
+const GITHUB_URL = 'https://github.com/nidaa-calls-ai/ai-voice-call'
+const GITHUB_REPO = 'github.com/nidaa-calls-ai/ai-voice-call'
 
 type Lang = 'ar' | 'en'
 
@@ -141,9 +144,11 @@ const T = {
       name: 'حسين شعبان',
       nameEn: 'Hussain Shaaban',
       role: 'مطوّر ومالك مشروع نداء',
-      bio: 'مطوّر عربي بيحب يبسّط الذكاء الاصطناعي للناس العادية. نداء واحد من مشاريعه المجانية اللي بتديها للجميع بدون مقابل. على قناته على اليوتيوب تلاقي شروحات خطوة بخطوة عن الإيجنتات وأدوات الذكاء الاصطناعي وكيف تستخدمها في شغلك اليومي.',
+      bio: 'مطوّر عربي بيحب يبسّط الذكاء الاصطناعي للناس العادية. نداء واحد من مشاريعه المجانية اللي بتديها للجميع بدون مقابل — ونداء مفتوح المصدر بالكامل: الكود متاح على جيت هب لأي حد عايز يستخدمه أو يطوّره. على قناته على اليوتيوب تلاقي شروحات خطوة بخطوة عن الإيجنتات وأدوات الذكاء الاصطناعي وكيف تستخدمها في شغلك اليومي.',
       youtube: 'قناتي على اليوتيوب — NextGen AI',
       youtubeSub: 'شروحات ذكاء اصطناعي وإيجنتات بالعربي',
+      github: 'المشروع مفتوح المصدر على جيت هب',
+      githubSub: 'استخدمه وعدّله وشارك في تطويره بحرية',
     },
     support: {
       title: 'المشروع مجاني… ودعمتك هي اللي بتخليه مستمر',
@@ -155,7 +160,7 @@ const T = {
     footer: {
       rights: 'كل الحقوق محفوظة',
       made: 'مصنوع بحب لخدمة المجتمع العربي',
-      links: { dashboard: 'لوحة التحكم', youtube: 'اليوتيوب', support: 'ادعمنا' },
+      links: { dashboard: 'لوحة التحكم', youtube: 'اليوتيوب', github: 'جيت هب', support: 'ادعمنا' },
     },
   },
   en: {
@@ -274,9 +279,11 @@ const T = {
       name: 'حسين شعبان',
       nameEn: 'Hussain Shaaban',
       role: 'Developer & owner of the Nidaa project',
-      bio: 'An Arab developer who loves making AI simple for everyday people. Nidaa is one of his free, open projects. On his YouTube channel you will find step-by-step tutorials about AI agents and tools, and how to use them in your daily work.',
+      bio: 'An Arab developer who loves making AI simple for everyday people. Nidaa is one of his free projects — and fully open source: the whole codebase is on GitHub for anyone who wants to use it or build on it. On his YouTube channel you will find step-by-step tutorials about AI agents and tools, and how to use them in your daily work.',
       youtube: 'My YouTube channel — NextGen AI',
       youtubeSub: 'Arabic tutorials on AI & agents',
+      github: 'Open source on GitHub',
+      githubSub: 'Use it, customize it and contribute freely',
     },
     support: {
       title: 'The project is free… your support keeps it alive',
@@ -288,7 +295,7 @@ const T = {
     footer: {
       rights: 'All rights reserved',
       made: 'Made with love for the Arab community',
-      links: { dashboard: 'Dashboard', youtube: 'YouTube', support: 'Support us' },
+      links: { dashboard: 'Dashboard', youtube: 'YouTube', github: 'GitHub', support: 'Support us' },
     },
   },
 }
@@ -552,8 +559,15 @@ export function LandingPage() {
             <div className="h-24 bg-gradient-to-l from-emerald-600 via-emerald-500 to-teal-400" />
             <CardContent className="p-6 sm:p-8 -mt-14">
               <div className="flex flex-col sm:flex-row sm:items-end gap-5">
-                <div className="w-24 h-24 rounded-3xl bg-gradient-to-br from-emerald-600 to-teal-500 text-white text-3xl font-extrabold flex items-center justify-center shadow-xl shadow-emerald-200 border-4 border-white">
-                  ح
+                <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-3xl overflow-hidden bg-gradient-to-br from-emerald-500 to-teal-400 shadow-xl shadow-emerald-200 border-4 border-white">
+                  <Image
+                    src="/hussein-avatar.png"
+                    alt={t.owner.name}
+                    width={360}
+                    height={360}
+                    className="w-full h-full object-cover"
+                    priority
+                  />
                 </div>
                 <div className="flex-1">
                   <div className="text-xs font-bold text-emerald-600 uppercase tracking-wide">{t.owner.title}</div>
@@ -561,22 +575,48 @@ export function LandingPage() {
                   <div className="text-sm text-zinc-500" dir="ltr">{t.owner.nameEn} — {t.owner.role}</div>
                 </div>
               </div>
-              <p className="mt-5 text-sm sm:text-base text-zinc-600 leading-8 max-w-3xl">{t.owner.bio}</p>
-              <a
-                href={YOUTUBE_URL}
-                target="_blank"
-                rel="noreferrer"
-                className="mt-6 inline-flex items-center gap-3 bg-white border border-rose-200 hover:bg-rose-50 transition rounded-2xl px-5 py-3.5 group"
-              >
-                <div className="w-11 h-11 rounded-xl bg-rose-600 flex items-center justify-center shadow-md shadow-rose-200">
-                  <Youtube className="w-6 h-6 text-white" />
-                </div>
-                <div>
-                  <div className="font-extrabold text-zinc-800 text-sm group-hover:text-rose-700 transition">{t.owner.youtube}</div>
-                  <div className="text-xs text-zinc-500">{t.owner.youtubeSub}</div>
-                  <div className="text-[11px] text-zinc-400 font-mono" dir="ltr">youtube.com/@NextGen_AI2023</div>
-                </div>
-              </a>
+              <div className="mt-5 flex flex-col sm:flex-row items-center sm:items-start gap-6">
+                <p className="flex-1 text-sm sm:text-base text-zinc-600 leading-8">{t.owner.bio}</p>
+                <Image
+                  src="/hussein-casual.jpg"
+                  alt={t.owner.name}
+                  width={761}
+                  height={941}
+                  className="w-36 sm:w-44 shrink-0 rounded-2xl border-4 border-white shadow-lg shadow-emerald-200/70 rotate-1"
+                />
+              </div>
+              <div className="mt-6 flex flex-wrap gap-4">
+                <a
+                  href={YOUTUBE_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-3 bg-white border border-rose-200 hover:bg-rose-50 transition rounded-2xl px-5 py-3.5 group"
+                >
+                  <div className="w-11 h-11 rounded-xl bg-rose-600 flex items-center justify-center shadow-md shadow-rose-200">
+                    <Youtube className="w-6 h-6 text-white" />
+                  </div>
+                  <div>
+                    <div className="font-extrabold text-zinc-800 text-sm group-hover:text-rose-700 transition">{t.owner.youtube}</div>
+                    <div className="text-xs text-zinc-500">{t.owner.youtubeSub}</div>
+                    <div className="text-[11px] text-zinc-400 font-mono" dir="ltr">youtube.com/@NextGen_AI2023</div>
+                  </div>
+                </a>
+                <a
+                  href={GITHUB_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-3 bg-white border border-zinc-200 hover:bg-zinc-50 transition rounded-2xl px-5 py-3.5 group"
+                >
+                  <div className="w-11 h-11 rounded-xl bg-zinc-900 flex items-center justify-center shadow-md shadow-zinc-300">
+                    <Github className="w-6 h-6 text-white" />
+                  </div>
+                  <div>
+                    <div className="font-extrabold text-zinc-800 text-sm group-hover:text-zinc-950 transition">{t.owner.github}</div>
+                    <div className="text-xs text-zinc-500">{t.owner.githubSub}</div>
+                    <div className="text-[11px] text-zinc-400 font-mono" dir="ltr">{GITHUB_REPO}</div>
+                  </div>
+                </a>
+              </div>
             </CardContent>
           </Card>
         </section>
@@ -636,6 +676,10 @@ export function LandingPage() {
           <nav className="flex items-center gap-4 font-semibold" aria-label="footer">
             <Link href="/dashboard" className="text-emerald-700 hover:underline">{t.footer.links.dashboard}</Link>
             <a href={YOUTUBE_URL} target="_blank" rel="noreferrer" className="text-rose-600 hover:underline">{t.footer.links.youtube}</a>
+            <a href={GITHUB_URL} target="_blank" rel="noreferrer" className="text-zinc-700 hover:underline inline-flex items-center gap-1">
+              <Github className="w-3.5 h-3.5" />
+              {t.footer.links.github}
+            </a>
             <a href="#support" className="text-amber-600 hover:underline">{t.footer.links.support}</a>
           </nav>
         </div>
