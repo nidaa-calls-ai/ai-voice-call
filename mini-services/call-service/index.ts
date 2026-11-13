@@ -30,8 +30,10 @@ loadRootEnv()
  *
  * Internal HTTP endpoints (same server, localhost only, shared-secret protected):
  *   POST /internal/emit        { room, event, data }          -> emit event to a room
- *   POST /internal/watch-call  { callId, timeoutSec, userId } -> start missed-call countdown
  *   GET  /internal/status?room=<userId>                       -> { phoneOnline, dashOnline } for that user
+ *
+ * NOTE: calls are NEVER auto-missed here anymore — the ring has no timeout and
+ * stays open until the user answers, declines or hangs up by themselves.
  *
  * Phone client events:
  *   join:phone  { token }     -> token verified against Next.js -> joins phone:<userId>
@@ -91,16 +93,6 @@ const httpServer = createServer((req, res) => {
         res.end(JSON.stringify({ ok: true }))
         return
       }
-
-      if (req.url === '/internal/watch-call') {
-        const callId = String(parsed.callId || '')
-        const timeoutSec = Number(parsed.timeoutSec || 45)
-        const userId = String(parsed.userId || '')
-        if (callId) startMissedTimer(callId, timeoutSec, userId)
-        res.writeHead(200, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ ok: true }))
-        return
-      }
     }
 
     res.writeHead(404, { 'Content-Type': 'application/json' })
@@ -137,32 +129,7 @@ function countIn(room: string): number {
   return roomCounts.get(room)?.size ?? 0
 }
 
-// callId -> pending missed-call timer (with the owner's userId)
-const ringTimers = new Map<string, { timer: ReturnType<typeof setTimeout>; userId: string }>()
-
-function startMissedTimer(callId: string, timeoutSec: number, userId: string) {
-  cancelMissedTimer(callId)
-  const t = setTimeout(() => {
-    ringTimers.delete(callId)
-    // Nobody answered / declined / ended in time -> mark as missed
-    const pRoom = userId ? `phone:${userId}` : 'phone'
-    const dRoom = userId ? `dash:${userId}` : 'dash'
-    io.to(pRoom).emit('call-missed', { callId })
-    io.to(dRoom).emit('call-missed', { callId })
-    void notifyNext(callId, 'missed')
-  }, Math.max(5, timeoutSec) * 1000)
-  ringTimers.set(callId, { timer: t, userId })
-}
-
-function cancelMissedTimer(callId: string) {
-  const entry = ringTimers.get(callId)
-  if (entry) {
-    clearTimeout(entry.timer)
-    ringTimers.delete(callId)
-  }
-}
-
-async function notifyNext(callId: string, type: 'answered' | 'declined' | 'ended' | 'missed', durationSec?: number) {
+async function notifyNext(callId: string, type: 'answered' | 'declined' | 'ended', durationSec?: number) {
   try {
     await fetch(`${NEXT_BASE}/api/internal/call-event`, {
       method: 'POST',
@@ -240,7 +207,6 @@ io.on('connection', (socket: Socket) => {
   socket.on('call:answer', (data: { callId?: string }) => {
     const callId = String(data?.callId || '')
     if (!callId) return
-    cancelMissedTimer(callId)
     if (joinedUserId) io.to(`dash:${joinedUserId}`).emit('call-answered', { callId })
     void notifyNext(callId, 'answered')
   })
@@ -248,7 +214,6 @@ io.on('connection', (socket: Socket) => {
   socket.on('call:decline', (data: { callId?: string }) => {
     const callId = String(data?.callId || '')
     if (!callId) return
-    cancelMissedTimer(callId)
     if (joinedUserId) io.to(`dash:${joinedUserId}`).emit('call-declined', { callId })
     void notifyNext(callId, 'declined')
   })
@@ -256,7 +221,6 @@ io.on('connection', (socket: Socket) => {
   socket.on('call:end', (data: { callId?: string; durationSec?: number }) => {
     const callId = String(data?.callId || '')
     if (!callId) return
-    cancelMissedTimer(callId)
     const durationSec = Number(data?.durationSec || 0)
     if (joinedUserId) io.to(`dash:${joinedUserId}`).emit('call-ended', { callId, durationSec })
     void notifyNext(callId, 'ended', durationSec)

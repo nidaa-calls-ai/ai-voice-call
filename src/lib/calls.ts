@@ -14,7 +14,6 @@ export type CallInput = {
 }
 
 const SOCKET_PORT = 3003
-const RING_TIMEOUT_SEC = 45
 
 /** Base URL of the socket.io mini-service (same machine). */
 function socketBaseUrl(): string {
@@ -151,35 +150,14 @@ export async function createCall(input: CallInput): Promise<CallRecord> {
   // socket mini-service cannot run) — it rings within seconds via GET /api/calls,
   // so no Web Push is needed (avoids a double notification).
 
-  // Dashboard live feed + start the missed-call countdown
+  // Dashboard live feed (the ring NEVER times out server-side — the call stays
+  // ringing until the user answers, declines or hangs up by themselves)
   await emitToRoom(dRoom, 'incoming-call', payload)
-  await socketInternal('/internal/watch-call', {
-    callId: payload.id,
-    timeoutSec: RING_TIMEOUT_SEC,
-    userId: input.userId,
-  })
 
   return payload
 }
 
 export type CallEventType = 'answered' | 'declined' | 'missed' | 'ended'
-
-/**
- * Safety net (serverless-friendly): mark the user's calls stuck in "ringing" for more
- * than the ring timeout as missed. Covers lost in-memory timers (e.g. the socket
- * mini-service not running — like on Vercel) and service restarts.
- */
-export async function reapStaleRingingCalls(userId: string): Promise<void> {
-  const cutoff = new Date(Date.now() - (RING_TIMEOUT_SEC + 5) * 1000)
-  try {
-    await db.call.updateMany({
-      where: { userId, status: 'ringing', createdAt: { lt: cutoff } },
-      data: { status: 'missed', endedAt: new Date() },
-    })
-  } catch {
-    /* ignore */
-  }
-}
 
 /** Update a call status from socket/phone events and broadcast to the owner's dashboard. */
 export async function updateCallFromEvent(callId: string, type: CallEventType, durationSec?: number): Promise<CallRecord | null> {

@@ -87,8 +87,9 @@ export default function PhonePage() {
   const tokenRef = useRef<string>('')
   const ringIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const vibrateIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const ringTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
+  // abort controller for the streaming chat+voice request (cancel on hangup)
+  const chatAbortRef = useRef<AbortController | null>(null)
   const mutedRef = useRef(false)
   const speakingRef = useRef(false)
   const callActiveRef = useRef(false)
@@ -395,24 +396,8 @@ export default function PhonePage() {
       navigator.vibrate?.([800, 400, 800])
       vibrateIntervalRef.current = setInterval(() => navigator.vibrate?.([800, 400, 800]), 2200)
     }
-    // local 45s ring timeout (works even without the realtime missed-timer,
-    // e.g. on Vercel where the socket mini-service is not running)
-    if (ringTimeoutRef.current) clearTimeout(ringTimeoutRef.current)
-    ringTimeoutRef.current = setTimeout(() => {
-      ringTimeoutRef.current = null
-      if (stateRef.current !== 'ringing') return
-      const ringingCall = currentCallRef.current
-      stopRing()
-      setState('missed')
-      setCurrentCall(null)
-      if (ringingCall) {
-        fetch(`/api/calls/${ringingCall.id}`, {
-          method: 'PATCH',
-          headers: { ...authHeaders({ token: tokenRef.current } as AuthSession), 'Content-Type': 'application/json' },
-          body: JSON.stringify({ event: 'missed' }),
-        }).catch(() => {})
-      }
-    }, 45000)
+    // NO ring timeout by design: the ring continues until the user answers or
+    // declines — even if it waits an hour. Only the user closes the call.
   }
 
   function stopRing() {
@@ -423,10 +408,6 @@ export default function PhonePage() {
     if (vibrateIntervalRef.current) {
       clearInterval(vibrateIntervalRef.current)
       vibrateIntervalRef.current = null
-    }
-    if (ringTimeoutRef.current) {
-      clearTimeout(ringTimeoutRef.current)
-      ringTimeoutRef.current = null
     }
     if (typeof navigator !== 'undefined') navigator.vibrate?.(0)
   }
@@ -553,6 +534,133 @@ export default function PhonePage() {
     }
   }, [])
 
+  /** Play one base64 audio payload through a shared Audio element; resolves when done. */
+  function playBase64(b64: string, mime: string): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const bin = atob(b64)
+      const bytes = new Uint8Array(bin.length)
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+      const url = URL.createObjectURL(new Blob([bytes], { type: mime }))
+      const el = audioElRef.current || new Audio()
+      audioElRef.current = el
+      el.src = url
+      el.onended = () => {
+        URL.revokeObjectURL(url)
+        resolve()
+      }
+      el.onerror = () => {
+        URL.revokeObjectURL(url)
+        resolve()
+      }
+      el.play().catch(() => {
+        URL.revokeObjectURL(url)
+        resolve()
+      })
+    })
+  }
+
+  // ---------------------------------------------------------------------------
+  // Streaming chat+voice: ONE request that returns the assistant reply as an
+  // NDJSON stream — the audio of every sentence arrives as soon as it is
+  // synthesized, so the phone starts SPEAKING while the rest is still being
+  // generated. This is what makes the call feel live instead of waiting for a
+  // full LLM + TTS round-trip before the first word.
+  // ---------------------------------------------------------------------------
+  const speakChat = useCallback(
+    (
+      body: { callId: string; text?: string; agentMessage?: string },
+      opts: { intro?: boolean; fallbackText?: string },
+      onText: (reply: string) => void,
+      onDone: () => void
+    ) => {
+      speakingRef.current = true
+      setCallStatus(opts.intro ? 'connecting' : 'thinking') // preparing the voice
+
+      const finish = () => {
+        if (!speakingRef.current) return
+        speakingRef.current = false
+        onDone()
+      }
+
+      const controller = new AbortController()
+      chatAbortRef.current = controller
+      const call = currentCallRef.current
+
+      ;(async () => {
+        let chain: Promise<void> = Promise.resolve()
+        let played = 0
+        let doneReply: string | null = null
+        try {
+          const res = await fetch('/api/call/chat', {
+            method: 'POST',
+            headers: {
+              ...authHeaders({ token: tokenRef.current } as AuthSession),
+              'Content-Type': 'application/json',
+              Accept: 'application/x-ndjson',
+            },
+            body: JSON.stringify({ callId: body.callId, text: body.text ?? '', agentMessage: body.agentMessage }),
+            signal: controller.signal,
+          })
+          if (!res.ok || !res.body) throw new Error('stream unavailable')
+          const reader = res.body.getReader()
+          const decoder = new TextDecoder()
+          let buf = ''
+          for (;;) {
+            const { value, done } = await reader.read()
+            if (done) break
+            buf += decoder.decode(value, { stream: true })
+            const lines = buf.split('\n')
+            buf = lines.pop() || ''
+            for (const line of lines) {
+              if (!line.trim()) continue
+              let msg: { type?: string; audio?: string; mime?: string; reply?: string }
+              try {
+                msg = JSON.parse(line)
+              } catch {
+                continue
+              }
+              if (msg.type === 'audio' && msg.audio) {
+                played++
+                setCallStatus('speaking')
+                const mime = msg.mime || 'audio/mpeg'
+                const b64 = msg.audio
+                chain = chain.then(() => (callActiveRef.current && speakingRef.current ? playBase64(b64, mime) : undefined))
+              } else if (msg.type === 'done') {
+                doneReply = msg.reply || null
+              }
+            }
+          }
+          await chain
+          const reply = doneReply || ''
+          if (reply) onText(reply)
+          if (played === 0 && reply) {
+            // both server TTS engines failed -> device voices with the full reply
+            setCallStatus('speaking')
+            speakWithBrowser(reply, finish, () => setCallStatus('speaking'))
+            return
+          }
+          finish()
+        } catch (err) {
+          if ((err as Error)?.name === 'AbortError') {
+            speakingRef.current = false
+            chatAbortRef.current = null
+            return
+          }
+          // stream failed -> honest fallback: speak the provided fallback text
+          speakingRef.current = false
+          chatAbortRef.current = null
+          if (opts.fallbackText) {
+            speak(opts.fallbackText, onDone)
+            return
+          }
+          onDone()
+        }
+      })()
+    },
+    [speakWithBrowser]
+  )
+
+  /** Plain text -> server voice (fish.audio first, z-ai fallback), browser TTS as last resort. */
   const speak = useCallback(
     (text: string, onDone: () => void, intro = false) => {
       speakingRef.current = true
@@ -658,78 +766,45 @@ export default function PhonePage() {
     agentProcessingRef.current = true
     setInterimText('')
     recognitionRef.current?.abort()
-    setCallStatus('thinking')
-    fetch('/api/call/chat', {
-      method: 'POST',
-      headers: { ...authHeaders({ token: tokenRef.current } as AuthSession), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ callId: call.id, agentMessage: msg }),
-    })
-      .then((r) => r.json())
-      .then((data) => {
-        if (!callActiveRef.current) return
-        const reply = (data?.reply || msg) as string
-        setTurns((prev) => [...prev, { role: 'assistant', text: reply }])
-        speak(
-          reply,
-          () => {
-            agentProcessingRef.current = false
-            if (agentQueueRef.current.length) processAgentQueue()
-            else {
-              setCallStatus('listening')
-              startListening()
-            }
-          },
-          false
-        )
-      })
-      .catch(() => {
-        if (!callActiveRef.current) return
+    // streamed chat+voice: the update starts speaking sentence-by-sentence
+    speakChat(
+      { callId: call.id, agentMessage: msg },
+      { fallbackText: msg },
+      (reply) => {
+        if (callActiveRef.current) setTurns((prev) => [...prev, { role: 'assistant', text: reply }])
+      },
+      () => {
         agentProcessingRef.current = false
-        // at least say the raw update so the user never misses agent news
-        setTurns((prev) => [...prev, { role: 'agent', text: msg }])
-        speak(
-          msg,
-          () => {
-            if (agentQueueRef.current.length) processAgentQueue()
-            else {
-              setCallStatus('listening')
-              startListening()
-            }
-          },
-          false
-        )
-      })
+        if (agentQueueRef.current.length) processAgentQueue()
+        else {
+          setCallStatus('listening')
+          startListening()
+        }
+      }
+    )
   }
 
   const handleUserUtterance = useCallback(
     (text: string) => {
       const call = currentCallRef.current
       if (!call || !callActiveRef.current) return
-      setCallStatus('thinking')
       setInterimText('')
       setTurns((prev) => [...prev, { role: 'user', text }])
-      fetch('/api/call/chat', {
-        method: 'POST',
-        headers: { ...authHeaders({ token: tokenRef.current } as AuthSession), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ callId: call.id, text }),
-      })
-        .then((r) => r.json())
-        .then((data) => {
-          if (!callActiveRef.current) return
-          const reply = data?.reply || 'معلش، مش قادر أرد دلوقتي. جرّب تاني.'
-          setTurns((prev) => [...prev, { role: 'assistant', text: reply }])
-          speak(reply, () => {
-            setCallStatus('listening')
-            startListening()
-          })
-        })
-        .catch(() => {
-          if (!callActiveRef.current) return
+      // streamed chat+voice: the reply starts playing after its FIRST sentence
+      // is synthesized — no waiting for the whole LLM + TTS round-trip
+      speakChat(
+        { callId: call.id, text },
+        { fallbackText: 'معلش، مش قادر أرد دلوقتي. جرّب تاني.' },
+        (reply) => {
+          if (callActiveRef.current) setTurns((prev) => [...prev, { role: 'assistant', text: reply }])
+        },
+        () => {
           setCallStatus('listening')
           startListening()
-        })
+        }
+      )
     },
-    [speak, startListening]
+    [speakChat, startListening]
   )
 
   // -------------------------------------------------------------------------
@@ -769,40 +844,20 @@ export default function PhonePage() {
     processedAgentIdxRef.current = new Set()
     timerRef.current = setInterval(() => setDuration((d) => d + 1), 1000)
 
-    // opening greeting from the assistant
-    fetch('/api/call/chat', {
-      method: 'POST',
-      headers: { ...authHeaders({ token: tokenRef.current } as AuthSession), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ callId: call.id, text: '' }),
-    })
-      .then((r) => r.json())
-      .then((data) => {
-        if (!callActiveRef.current) return
-        const reply = data?.reply || `أهلاً! المهمة "${call.taskName}" خلصت. تحب تفاصيل أكتر؟`
-        setTurns((prev) => [...prev, { role: 'assistant', text: reply }])
-        speak(
-          reply,
-          () => {
-            setCallStatus('listening')
-            startListening()
-          },
-          true
-        )
-      })
-      .catch(() => {
-        if (!callActiveRef.current) return
-        const fallback = `أهلاً! المهمة "${call.taskName}" خلصت خلاص. تحب تفاصيل أكتر؟`
-        setTurns((prev) => [...prev, { role: 'assistant', text: fallback }])
-        speak(
-          fallback,
-          () => {
-            setCallStatus('listening')
-            startListening()
-          },
-          true
-        )
-      })
-  }, [speak, startListening])
+    // opening greeting from the assistant (streamed: the first sentence speaks
+    // almost immediately — the call feels live from the first second)
+    speakChat(
+      { callId: call.id, text: '' },
+      { intro: true, fallbackText: `أهلاً! المهمة "${call.taskName}" خلصت خلاص. تحب تفاصيل أكتر؟` },
+      (reply) => {
+        if (callActiveRef.current) setTurns((prev) => [...prev, { role: 'assistant', text: reply }])
+      },
+      () => {
+        setCallStatus('listening')
+        startListening()
+      }
+    )
+  }, [speakChat, startListening])
 
   function endCall() {
     const call = currentCallRef.current
@@ -812,6 +867,8 @@ export default function PhonePage() {
     stopTimer()
     recognitionRef.current?.abort()
     recognitionRef.current = null
+    chatAbortRef.current?.abort()
+    chatAbortRef.current = null
     stopAudioPlayback()
     speakingRef.current = false
     agentQueueRef.current = []
@@ -838,6 +895,8 @@ export default function PhonePage() {
     const call = currentCallRef.current
     callActiveRef.current = false
     stopRing()
+    chatAbortRef.current?.abort()
+    chatAbortRef.current = null
     stopAudioPlayback()
     speakingRef.current = false
     agentQueueRef.current = []
@@ -1020,7 +1079,7 @@ export default function PhonePage() {
         {state === 'missed' && (
           <div className="bg-red-50 border border-red-200 text-red-800 rounded-2xl p-4 flex items-center gap-3">
             <PhoneMissed className="w-5 h-5 shrink-0" />
-            <p className="text-sm font-semibold">فاتتك مكالمة! المساعد استنى 45 ثانية ولو مفيش رد سجلها كمكالمة فايتة.</p>
+            <p className="text-sm font-semibold">فيه مكالمة من المساعد ما اتردتش عليها.</p>
           </div>
         )}
 

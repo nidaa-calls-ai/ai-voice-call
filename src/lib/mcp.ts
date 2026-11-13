@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { createCall, listUserCalls, getUserCall, parseTranscript, pushAgentUpdate, reapStaleRingingCalls } from '@/lib/calls'
+import { createCall, listUserCalls, getUserCall, parseTranscript, pushAgentUpdate } from '@/lib/calls'
 import type { SafeUser } from '@/lib/auth'
 
 /**
@@ -84,6 +84,8 @@ const WAIT_FOR_CALL_UPDATES_TOOL = {
     'LONG-POLL the live voice call. Call it in a LOOP right after notify_task_complete and keep looping while the call is active. ' +
     'Each call waits up to ~20 seconds and returns: the live call status, everything NEW the user said during the call (transcribed), and any agent updates already sent. ' +
     'When the user asks you to DO something (reply to an email, reschedule, fetch data), do it immediately, push the result into the call with send_call_update, then loop again. ' +
+    'IMPORTANT: there is NO timeout on the call — it never ends by itself and the ring never stops until the user answers or hangs up, even after a long wait. ' +
+    'So NEVER give up and NEVER end your turn because a poll returned no new words: the user may be busy, thinking, or about to speak — call this tool again immediately. ' +
     'Keep looping until ended=true — that only happens when the USER hangs up. This is how you have a real-time two-way voice conversation from inside GPT/Claude.',
   inputSchema: {
     type: 'object',
@@ -172,7 +174,7 @@ function buildWaitPayload(call: NonNullable<Awaited<ReturnType<typeof getUserCal
       ? 'المكالمة اتقفلت من المستخدم — كده انتهت الجلسة الحية وانت تقدر تقفل ردك دلوقتي (لو فيه تنفيذ معلق مش هيبقى في مكالمة، اكمله عادي بعد كده).'
       : newTurns.some((t) => t.role === 'user')
         ? 'فيه كلام جديد من المستخدم أعلاه (new_turns) — نفذ أي طلب طلبه حالاً، وبعت النتيجة جوه نفس المكالمة بـ send_call_update، وبعدين لف تاني على wait_for_call_updates. متقفلش ردك ما دامت المكالمة شغالة.'
-        : 'مفيش كلام جديد لسه — المكالمة لسه شغالة. كمّل اللف على wait_for_call_updates (بنفس since_turn لو مفيش جديد، أو next_index لو اتجاب كلام جديد).',
+        : 'مفيش كلام جديد لسه — والمكالمة لسه شغالة ومش هتقفل لوحدها مهما استنى. المستخدم ممكن يكون بيتكلم دلوقتي أو بياخد وقته في الرد (الرد طويل ساعات). لف فوراً على wait_for_call_updates مرة تانية ومتستسلمش ومتقفلش ردك.',
   }
 }
 
@@ -205,7 +207,7 @@ async function executeTool(user: SafeUser, name: string, args: Record<string, un
       `تم بدء مكالمة صوتية حية للمستخدم الآن بخصوص مهمة "${taskName}".`,
       summary ? `الملخص اللي هيتقال للمستخدم بصوت المساعد: ${summary}` : null,
       result ? `النتيجة الفعلية اللي المساعد هيبلغها ويرد بيها على أسئلة المستخدم: ${result}` : null,
-      `حالة المكالمة: رنين — لو المستخدم رد هيكلمه مساعد صوتي بالعربي المصري ويقرا التقرير ويرد على أسئلته.`,
+      `حالة المكالمة: رنين — لو المستخدم رد هيكلمه مساعد صوتي بالعربي المصري ويقرا التقرير ويرد على أسئلته. الرنين مالوش مهلة: هيفضل رنة لحد ما يرد، حتى لو استنى وقت طويل.`,
       `call_id: ${call.id} | الحالة الحالية: ${statusArabic(call.status)}`,
       `مهم جداً: ده مش إشعار عادي — دي جلسة حية. لازم تبدأ فوراً حلقة على wait_for_call_updates بنفس الـ call_id ده: هتسمع كلام المستخدم أثناء المكالمة، تنفذ أي طلب يطلبه (زي رد على إيميل)، وترجع تبلغه بنفس المكالمة بـ send_call_update، وتفضل تعيد الدورة لحد ما ended=true (يعني هو هو اللي قفل المكالمة). متقفلش ردك ما دامت المكالمة شغالة.`,
       `معلومة: لو التطبيق مقفول على موبايله هيوصله إشعار Web Push بيفتح شاشة المكالمة بضغطة واحدة، والمكالمة عمرها ما بتتقفل من عندك — بس المستخدم اللي بيقفلها.`,
@@ -218,9 +220,8 @@ async function executeTool(user: SafeUser, name: string, args: Record<string, un
     if (!callId) {
       return { content: 'خطأ: لازم تبعت call_id اللي راجع من notify_task_complete.', isError: true }
     }
-    // serverless safety net: close stale "ringing" calls nobody answered (the socket
-    // mini-service missed-timer may not exist, e.g. on Vercel)
-    await reapStaleRingingCalls(user.id)
+    // NOTE: calls are NEVER reaped/timed-out server-side — the ring and the live
+    // session stay open until the user answers, declines or hangs up themselves.
     const since = Math.max(0, Math.floor(Number(args.since_turn) || 0))
     const timeoutSec = Math.min(Math.max(Number(args.timeout_sec) || 20, 3), 25)
 
@@ -277,7 +278,7 @@ async function executeTool(user: SafeUser, name: string, args: Record<string, un
           call_status: status,
           note:
             status === 'ringing'
-              ? 'المستخدم لسه ماردش على الرنين — التحديث اتخزن وهيسمعه فور ما يرد. كمّل اللف على wait_for_call_updates.'
+              ? 'المستخدم لسه ماردش على الرنين — التحديث اتخزن وهيسمعه فور ما يرد (الرنين مش هيتقفل لوحده، فمفيش استعجال). كمّل اللف على wait_for_call_updates.'
               : 'التحديث وصل المكالمة والمساعد هيتقاله للمستخدم بصوت عالي دلوقتي. كمّل الاستماع على كلام المستخدم الجديد بـ wait_for_call_updates.',
         },
         null,
@@ -328,7 +329,7 @@ export async function handleMcpPost(body: unknown, user: SafeUser): Promise<Next
           'استخدم أداة notify_task_complete فور انتهاء أي مهمة أو عمل مجدول عشان المستخدم يستلم مكالمة صوتية بالملخص. ' +
           'المكالمة دي جلسة حية، مش إشعار: بعد ما تاخد call_id لفّ على wait_for_call_updates لحد ما المكالمة تخلص، وساعتها هتسمع كل كلام المستخدم جوه المكالمة. ' +
           'نفذ أي طلب المستخدم يطلبه أثناء المكالمة (زي الرد على إيميل) وبعت النتيجة فوراً بـ send_call_update فهيتقال له بصوت المساعد في نفس اللحظة. ' +
-          'المكالمة عمرها ما بتتقفل منك — بس لما المستخدم نفسه يقفلها (ended=true)، وساعتها بس تقفل ردك.',
+          'مهم: المكالمة مالهاش مهلة نهائياً — مش هتقفل لوحدها ولا الرنين هيتقفل، حتى لو المستخدم اتأخر ساعة في الرد. لف على wait_for_call_updates مرة ورا مرة لحد ما ترجع ended=true، وساعتها بس تقفل ردك — يعني لما المستخدم نفسه يقفل المكالمة.',
       })
     }
 
