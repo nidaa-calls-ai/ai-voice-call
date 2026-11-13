@@ -1,0 +1,66 @@
+generator client {
+  provider        = "prisma-client-js"
+  // Driver adapters: lets the runtime client talk to Turso (libsql) in production
+  // while local dev keeps using the plain SQLite file via DATABASE_URL.
+  previewFeatures = ["driverAdapters"]
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// Key-value settings: VAPID keys, internal config, etc.
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+// Multi-user accounts: every user gets their own access token,
+// their own fish.audio voice credentials and fully isolated calls/push.
+model User {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  passwordHash String
+  displayName  String
+  accessToken  String   @unique
+  fishApiKey   String?
+  fishVoiceId  String?
+  createdAt    DateTime @default(now())
+  calls        Call[]
+  pushSubs     PushSubscription[]
+}
+
+// One row per voice call triggered by MCP / REST / test button — scoped to its owner.
+model Call {
+  id          String   @id @default(cuid())
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  source      String   @default("mcp") // mcp | rest | test
+  taskName    String
+  summary     String?
+  result      String?
+  message     String?
+  urgency     String   @default("normal") // low | normal | high
+  status      String   @default("ringing") // ringing | answered | declined | missed | completed
+  createdAt   DateTime @default(now())
+  answeredAt  DateTime?
+  endedAt     DateTime?
+  durationSec Int?
+  // JSON array of { role: "user" | "assistant" | "agent", text: string, at: string }
+  transcript  String?
+
+  @@index([userId, createdAt])
+}
+
+// Web Push subscriptions from the phone PWA — one user's devices only.
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now())
+}
