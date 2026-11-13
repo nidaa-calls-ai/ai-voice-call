@@ -1,23 +1,9 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Geist_Mono, Cairo } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
-
-const cairo = Cairo({
-  variable: "--font-cairo",
-  subsets: ["arabic", "latin"],
-  weight: ["400", "500", "600", "700", "800"],
-});
+// Cairo is self-hosted via @font-face in globals.css (/public/fonts) —
+// next/font/google broke Vercel Turbopack builds intermittently.
 
 export const metadata: Metadata = {
   title: "نداء — MCP Voice Caller",
@@ -52,8 +38,8 @@ export default function RootLayout({
   return (
     <html lang="ar" dir="rtl" suppressHydrationWarning>
       <body
-        className={`${geistSans.variable} ${geistMono.variable} ${cairo.variable} antialiased bg-background text-foreground`}
-        style={{ fontFamily: "var(--font-cairo), 'Segoe UI', Tahoma, sans-serif" }}
+        className="antialiased bg-background text-foreground"
+        style={{ fontFamily: "'Cairo', 'Segoe UI', Tahoma, sans-serif" }}
       >
         {children}
         <Toaster />
