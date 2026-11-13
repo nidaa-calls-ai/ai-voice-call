@@ -18,7 +18,7 @@ import { authHeaders, clearAuth, getAuth, updateAuthToken, type AuthSession } fr
 import {
   Copy, Check, Phone, Smartphone, Activity, PhoneOutgoing, History, Link2,
   KeyRound, RefreshCw, FlaskConical, Zap, CircleDot, Terminal, Timer, PhoneMissed,
-  AudioLines, Eye, EyeOff, Save, CirclePlay, LogOut, UserRound,
+  AudioLines, Eye, EyeOff, Save, CirclePlay, LogOut, UserRound, Brain,
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -72,6 +72,12 @@ export default function Dashboard() {
   const [showFishKey, setShowFishKey] = useState(false)
   const [savingFish, setSavingFish] = useState(false)
   const [testingFish, setTestingFish] = useState(false)
+  const [llmKey, setLlmKey] = useState('')
+  const [llmBaseUrl, setLlmBaseUrl] = useState('')
+  const [llmModel, setLlmModel] = useState('')
+  const [llmInfo, setLlmInfo] = useState<{ configured: boolean; apiKeyMasked: string | null; baseUrl: string; model: string; presets?: Array<{ label: string; baseUrl: string; model: string }> } | null>(null)
+  const [showLlmKey, setShowLlmKey] = useState(false)
+  const [savingLlm, setSavingLlm] = useState(false)
   const socketRef = useRef<Socket | null>(null)
   const feedIdRef = useRef(0)
   const fishAudioRef = useRef<HTMLAudioElement | null>(null)
@@ -137,6 +143,33 @@ export default function Dashboard() {
   useEffect(() => {
     if (auth?.token) refreshFish()
   }, [auth?.token, refreshFish])
+
+  const refreshLlm = useCallback(async () => {
+    const token = authRef.current?.token
+    if (!token) return
+    try {
+      const res = await fetch('/api/settings/llm', { headers: authHeaders({ token } as AuthSession) })
+      if (!res.ok) return
+      const data = await res.json()
+      if (data?.ok) {
+        setLlmInfo({
+          configured: !!data.configured,
+          apiKeyMasked: data.apiKeyMasked,
+          baseUrl: data.baseUrl || '',
+          model: data.model || '',
+          presets: data.presets,
+        })
+        setLlmBaseUrl((v) => v || data.baseUrl || '')
+        setLlmModel((v) => v || data.model || '')
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  useEffect(() => {
+    if (auth?.token) refreshLlm()
+  }, [auth?.token, refreshLlm])
 
   // auth boot: restore the saved session (or show the login gate)
   useEffect(() => {
@@ -239,6 +272,10 @@ export default function Dashboard() {
     setCalls([])
     setFeed([])
     setFishInfo(null)
+    setLlmInfo(null)
+    setLlmKey('')
+    setLlmBaseUrl('')
+    setLlmModel('')
     setLoaded(false)
     toast({ title: 'خرجت من حسابك', description: 'الجلسة اتقفلت على الجهاز ده بس' })
   }
@@ -310,6 +347,44 @@ export default function Dashboard() {
       toast({ title: 'فشل الاتصال', variant: 'destructive' })
     } finally {
       setSavingFish(false)
+    }
+  }
+
+  async function saveLlm(reset = false) {
+    setSavingLlm(true)
+    try {
+      const res = await fetch('/api/settings/llm', {
+        method: 'POST',
+        headers: { ...authHeaders(auth), 'Content-Type': 'application/json' },
+        body: JSON.stringify(
+          reset
+            ? { reset: true }
+            : { api_key: llmKey.trim(), base_url: llmBaseUrl.trim(), model: llmModel.trim() }
+        ),
+      })
+      const data = await res.json()
+      if (data?.ok) {
+        setLlmInfo({
+          configured: !!data.configured,
+          apiKeyMasked: data.apiKeyMasked,
+          baseUrl: data.baseUrl || '',
+          model: data.model || '',
+          presets: llmInfo?.presets,
+        })
+        setLlmKey('')
+        setShowLlmKey(false)
+        toast(
+          reset
+            ? { title: 'تم مسح مفتاح الذكاء الاصطناعي', description: 'المكالمة هترد دلوقتي من بيانات المهمة بس' }
+            : { title: 'دماغ النداء اتسجّلت', description: `المفتاح: ${data.apiKeyMasked} — المكالمة هتبقى حوار حر من دلوقتي` }
+        )
+      } else {
+        toast({ title: 'فشل الحفظ', description: data?.error || 'حاول تاني', variant: 'destructive' })
+      }
+    } catch {
+      toast({ title: 'فشل الاتصال', variant: 'destructive' })
+    } finally {
+      setSavingLlm(false)
     }
   }
 
@@ -623,6 +698,132 @@ export default function Dashboard() {
                   </Button>
                   <span className="text-xs text-zinc-400 font-mono" dir="ltr">
                     model: {fishInfo?.model || 's2.1-pro-free'}
+                  </span>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* AI brain settings (OpenAI-compatible LLM) */}
+            <Card className="border-emerald-100">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-lg">
+                  <Brain className="w-5 h-5 text-emerald-700" />
+                  دماغ المساعد — الذكاء الاصطناعي
+                </CardTitle>
+                <CardDescription className="leading-6">
+                  ده اللي بيخلي المساعد يرد على أي كلام بتقوله في المكالمة بحرية. من غيره المكالمة بترد من بيانات المهمة بس. مفتاح واحد مجاني وكل حاجة تشتغل — نفس النظام بتاع مفتاح الصوت بالظبط.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex flex-wrap items-center gap-2 text-sm">
+                  <Badge
+                    variant="outline"
+                    className={`border ${llmInfo?.configured ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}
+                  >
+                    {llmInfo?.configured ? 'المفتاح مفعّل واتخزن' : 'لسه بدون مفتاح'}
+                  </Badge>
+                  {llmInfo?.apiKeyMasked && (
+                    <code dir="ltr" className="text-xs font-mono text-zinc-500 bg-zinc-50 border rounded px-2 py-1">
+                      {llmInfo.apiKeyMasked}
+                    </code>
+                  )}
+                  <a
+                    href="https://openrouter.ai/keys"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-xs font-semibold text-emerald-700 hover:underline"
+                  >
+                    مفتاح مجاني من OpenRouter ↗ (اسحب لتحت واضغط Create Key)
+                  </a>
+                </div>
+
+                <div className="grid md:grid-cols-3 gap-4">
+                  <div className="space-y-1.5 md:col-span-3">
+                    <Label htmlFor="llm-key" className="text-sm font-semibold">
+                      مفتاح الـ API
+                    </Label>
+                    <div className="relative">
+                      <Input
+                        id="llm-key"
+                        dir="ltr"
+                        type={showLlmKey ? 'text' : 'password'}
+                        placeholder="sk-or-v1-... (OpenRouter) أو أي مفتاح OpenAI-compatible"
+                        className="font-mono text-xs pl-10 h-11 rounded-xl"
+                        value={llmKey}
+                        onChange={(e) => setLlmKey(e.target.value)}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowLlmKey((s) => !s)}
+                        className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600"
+                        aria-label={showLlmKey ? 'إخفاء المفتاح' : 'إظهار المفتاح'}
+                      >
+                        {showLlmKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-zinc-500 leading-5">
+                      لو سبته فاضي هيتسجل المفتاح المحفوظ حالياً زي ما هو.
+                    </p>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label htmlFor="llm-base" className="text-sm font-semibold">
+                      الـ Base URL
+                    </Label>
+                    <Input
+                      id="llm-base"
+                      dir="ltr"
+                      className="font-mono text-xs h-11 rounded-xl"
+                      placeholder="https://openrouter.ai/api/v1"
+                      value={llmBaseUrl}
+                      onChange={(e) => setLlmBaseUrl(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label htmlFor="llm-model" className="text-sm font-semibold">
+                      اسم الموديل
+                    </Label>
+                    <Input
+                      id="llm-model"
+                      dir="ltr"
+                      className="font-mono text-xs h-11 rounded-xl"
+                      placeholder="openrouter/free"
+                      value={llmModel}
+                      onChange={(e) => setLlmModel(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="flex flex-wrap items-end gap-2">
+                    {(llmInfo?.presets || []).map((p) => (
+                      <Button
+                        key={p.baseUrl}
+                        type="button"
+                        variant="outline"
+                        className="h-11 rounded-xl text-xs"
+                        onClick={() => {
+                          setLlmBaseUrl(p.baseUrl)
+                          setLlmModel(p.model)
+                        }}
+                      >
+                        {p.label}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button onClick={() => saveLlm(false)} disabled={savingLlm} className="bg-emerald-700 hover:bg-emerald-800 h-11 rounded-xl">
+                    {savingLlm ? <RefreshCw className="w-4 h-4 ml-2 animate-spin" /> : <Save className="w-4 h-4 ml-2" />}
+                    حفظ الإعدادات
+                  </Button>
+                  {llmInfo?.configured && (
+                    <Button onClick={() => saveLlm(true)} disabled={savingLlm} variant="outline" className="h-11 rounded-xl">
+                      مسح المفتاح
+                    </Button>
+                  )}
+                  <span className="text-xs text-zinc-400 font-mono" dir="ltr">
+                    {llmInfo?.configured ? `${llmInfo.model} @ ${llmInfo.baseUrl.replace(/^https?:\/\//, '')}` : 'المكالمة حالياً بترود من بيانات المهمة بس'}
                   </span>
                 </div>
               </CardContent>

@@ -1,8 +1,10 @@
 import { NextRequest } from 'next/server'
-import ZAI from 'z-ai-web-dev-sdk'
 import { appendTranscript, getUserCall, parseTranscript } from '@/lib/calls'
 import { authenticate } from '@/lib/auth'
 import { getOwnerVoice, synthesizeSentence } from '@/lib/call-voice'
+import { streamBrain, resolveLLM } from '@/lib/llm'
+
+type ChatMsg = { role: 'user' | 'assistant'; content: string }
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -47,102 +49,13 @@ function buildSystemPrompt(call: {
   ].join('\n')
 }
 
-type ChatMsg = { role: 'user' | 'assistant'; content: string }
-
-/** Pull the text delta out of one SSE `data:` payload (or a parsed chunk object). */
-function chunkText(part: unknown): string {
-  const obj = part as {
-    choices?: Array<{ delta?: { content?: string }; message?: { content?: string } }>
-  } | undefined
-  return obj?.choices?.[0]?.delta?.content || obj?.choices?.[0]?.message?.content || ''
-}
-
 /**
  * Ask the LLM, streaming sentence chunks as they are produced.
- * The z-ai SDK returns the stream as raw SSE bytes (a Readable of Buffers with
- * "data: {...}" lines) — we parse SSE ourselves. Defensive fallbacks:
- *   attempt 1: streaming (SSE parsed)
- *   attempt 2: full non-streaming completion
- *   attempt 3: streaming again
+ * The brain is configurable (env vars / per-account settings) — see lib/llm.ts.
+ * Defensive fallbacks inside streamBrain: provider stream -> full -> retry.
  */
-async function* streamLLM(messages: ChatMsg[]): AsyncGenerator<string, void, unknown> {
-  const zai = await ZAI.create()
-  let lastErr: unknown = null
-  for (const mode of ['stream', 'full', 'stream'] as const) {
-    try {
-      if (mode === 'stream') {
-        const completion = await zai.chat.completions.create({
-          messages,
-          stream: true,
-          thinking: { type: 'disabled' },
-        })
-        let gotAny = false
-        if (completion && typeof completion[Symbol.asyncIterator] === 'function') {
-          let raw = ''
-          const flushLine = (line: string): string | null => {
-            const t = line.trim()
-            if (!t.startsWith('data:')) return null
-            const payload = t.slice(5).trim()
-            if (!payload || payload === '[DONE]') return null
-            try {
-              return chunkText(JSON.parse(payload)) || null
-            } catch {
-              return null // partial JSON — dropped, next chunk carries the rest
-            }
-          }
-          for await (const part of completion as AsyncIterable<unknown>) {
-            // chunk may be a Buffer of SSE bytes OR an already-parsed object
-            if (part && typeof part === 'object' && 'choices' in (part as object)) {
-              const text = chunkText(part)
-              if (text) {
-                gotAny = true
-                yield text
-              }
-              continue
-            }
-            const bytes =
-              part instanceof Uint8Array ? part : typeof (part as { buffer?: unknown })?.buffer === 'object' ? new Uint8Array((part as unknown as ArrayBufferLike).buffer || part as unknown as ArrayBuffer) : null
-            raw += bytes ? new TextDecoder().decode(bytes) : String(part)
-            for (;;) {
-              const idx = raw.indexOf('\n')
-              if (idx === -1) break
-              const text = flushLine(raw.slice(0, idx))
-              raw = raw.slice(idx + 1)
-              if (text) {
-                gotAny = true
-                yield text
-              }
-            }
-          }
-          // remaining buffered line(s) at stream end
-          for (const line of raw.split('\n')) {
-            const text = flushLine(line)
-            if (text) {
-              gotAny = true
-              yield text
-            }
-          }
-        }
-        if (gotAny) return
-        lastErr = new Error('Empty LLM stream')
-      } else {
-        // non-streaming shape -> emit the whole reply at once
-        const completion = await zai.chat.completions.create({
-          messages,
-          thinking: { type: 'disabled' },
-        })
-        const text = (completion as { choices?: Array<{ message?: { content?: string } }> })
-          ?.choices?.[0]?.message?.content?.trim()
-        if (!text) throw new Error('Empty LLM response')
-        yield text
-        return
-      }
-    } catch (err) {
-      lastErr = err
-      await new Promise((r) => setTimeout(r, 500))
-    }
-  }
-  throw lastErr instanceof Error ? lastErr : new Error('LLM failed')
+async function* streamLLM(messages: ChatMsg[], userId: string): AsyncGenerator<string, void, unknown> {
+  yield* streamBrain(messages, userId)
 }
 
 function fallbackGreeting(call: { taskName: string; summary: string | null; result: string | null }): string {
@@ -153,8 +66,33 @@ function fallbackGreeting(call: { taskName: string; summary: string | null; resu
   return pieces.join(' ')
 }
 
-/** Honest fallback when OUR brain fails — never blames the user's voice. */
-const SOFT_FALLBACK = 'لحظة، الشبكة وقفت معايا ثانية — كمّل كلامك وأنا معاك.'
+/** Honest fallback when OUR brain fails — never blames the user's voice or network. */
+const SOFT_FALLBACK = 'ثانية واحدة معايا، الدماغ بتاعة النظام وقعت على الشبكة — جرّب تاني حالاً وأنا معاك.'
+
+/**
+ * Zero-config voice replies: when NO brain is configured (no env key, no
+ * account settings — the state a fresh Vercel deploy is in), the call still
+ * answers usefully out of the call's own facts instead of a robotic apology.
+ */
+function ruleReply(userText: string, call: { taskName: string; summary: string | null; result: string | null }): string {
+  const t = userText.replace(/[\u064B-\u065F\u0670]/g, '') // strip diacritics
+  const farewell = /(شكر|تسلم|ربنا يخليك|ربنا يحفظه|خلاص|سلام عليكم|مع السلامة|مع السلامه|بالسلامة|كده تمام|هو ده|كفايه|كفاية)/.test(t)
+  if (farewell) return 'تمام يا فندم! أي وقت تحب تفاصيل تاني كلمني. سلام!'
+
+  const wantsDetails = /(تفاصيل|حصل ايه|حصل إيه|اللي حصل|ايه اللي|إيه اللي|قوللي|قوللى|قولي|قولى|احكيلي|احكيلى|حدثني|علمني|امشي|ارجع|التقرير|النتيجة|النتيجه)/.test(t)
+  if (wantsDetails) {
+    const parts: string[] = []
+    if (call.summary) parts.push(call.summary)
+    if (call.result) parts.push(`النتيجة الفعلية: ${call.result}`)
+    if (!parts.length) parts.push(`المهمة "${call.taskName}" اكتملت، بس مفيش تفاصيل إضافية متسجلة عندي حالياً.`)
+    return parts.join(' ')
+  }
+
+  const greeting = /(أهلا|اهلا|السلام عليكم|هاي|هلا|الو|ألو|مساء الخير|صباح الخير|ازيك|إزيك)/.test(t)
+  if (greeting) return `أهلاً بيك! المهمة "${call.taskName}" خلصت فعلاً — تحب أقولك إيه اللي حصل بالتفصيل؟`
+
+  return 'معايا تقرير المهمة كامل وجهزتهولك. عشان أرد على أي سؤال بحرية، ضيف مفتاح ذكاء اصطناعي مجاني من صفحة الإعدادات، ولو عايز تفاصيل المهمة اسألني على طول.'
+}
 
 // ---------------------------------------------------------------------------
 // Sentence streaming helpers
@@ -291,6 +229,11 @@ export async function POST(req: NextRequest) {
 
     const wantsStream = (req.headers.get('accept') || '').includes('ndjson')
     const owner = await getOwnerVoice(user.id)
+    // Is a brain configured at all (env / account settings)? When nothing is
+    // configured (fresh Vercel deploy) we answer out of the call's own facts
+    // instead of attempting an LLM that can only fail.
+    const brain = await resolveLLM(user.id)
+    const noBrain = brain === null
 
     const finalize = async (reply: string): Promise<{ ok: true; reply: string }> => {
       // Persist both sides of the conversation (agent updates are already stored)
@@ -299,18 +242,24 @@ export async function POST(req: NextRequest) {
       return { ok: true, reply }
     }
 
+    /** The honest reply when the brain can't answer: facts for intro/details, rule replies for chat. */
+    const honestReply = (): string => {
+      const facts = { taskName: call.taskName, summary: call.summary, result: call.result }
+      if (isIntro) return fallbackGreeting(facts)
+      if (agentMessage) return agentMessage
+      if (noBrain) return ruleReply(userText, facts)
+      return SOFT_FALLBACK
+    }
+
     // ---------------- legacy JSON mode ----------------
     if (!wantsStream) {
       let reply = ''
       try {
-        for await (const chunk of streamLLM(messages)) reply += chunk
+        if (noBrain) throw new Error('No LLM configured')
+        for await (const chunk of streamLLM(messages, user.id)) reply += chunk
       } catch (err) {
         console.error('[call/chat] LLM error:', err)
-        reply = isIntro
-          ? fallbackGreeting({ taskName: call.taskName, summary: call.summary, result: call.result })
-          : agentMessage
-            ? agentMessage
-            : SOFT_FALLBACK
+        reply = honestReply()
       }
       const result = await finalize(reply.trim())
       return Response.json(result)
@@ -335,8 +284,9 @@ export async function POST(req: NextRequest) {
         let voiceUsed: string | null = null
         let seq = 0
         try {
+          if (noBrain) throw new Error('No LLM configured')
           let buffer = ''
-          for await (const delta of streamLLM(messages)) {
+          for await (const delta of streamLLM(messages, user.id)) {
             reply += delta
             buffer += delta
             const { sentences, rest } = extractSentences(buffer, false)
@@ -359,11 +309,7 @@ export async function POST(req: NextRequest) {
           console.error('[call/chat] stream error:', err)
           if (!playedAny) {
             // the brain failed before saying anything -> honest fallback, spoken too
-            reply = isIntro
-              ? fallbackGreeting({ taskName: call.taskName, summary: call.summary, result: call.result })
-              : agentMessage
-                ? agentMessage
-                : SOFT_FALLBACK
+            reply = honestReply()
             try {
               const synth = await synthesizeSentence(reply, owner)
               playedAny = true
