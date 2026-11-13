@@ -1,8 +1,9 @@
+// Driver adapters are GA since Prisma 6.7 — the `adapter` option on
+// PrismaClient works without any preview feature flag, and the runtime
+// client talks to Turso (libsql) in production while local dev keeps
+// using the plain SQLite file via DATABASE_URL.
 generator client {
-  provider        = "prisma-client-js"
-  // Driver adapters: lets the runtime client talk to Turso (libsql) in production
-  // while local dev keeps using the plain SQLite file via DATABASE_URL.
-  previewFeatures = ["driverAdapters"]
+  provider = "prisma-client-js"
 }
 
 datasource db {
