@@ -10,10 +10,18 @@ const server = http.createServer((req, res) => {
     req.on('data', (c) => (body += c))
     req.on('end', () => {
       let model = 'unknown'
+      let wantStream = true
       try {
-        model = JSON.parse(body)?.model || 'none-sent'
+        const parsed = JSON.parse(body)
+        model = parsed?.model || 'none-sent'
+        wantStream = parsed?.stream !== false
       } catch {}
-      console.log('[mock-llm] request received, model =', model)
+      console.log('[mock-llm] request received, model =', model, 'stream =', wantStream)
+      if (!wantStream) {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ choices: [{ message: { content: REPLY } }] }))
+        return
+      }
       res.writeHead(200, { 'Content-Type': 'text/event-stream' })
       const words = REPLY.split(' ')
       let i = 0

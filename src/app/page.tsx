@@ -78,6 +78,7 @@ export default function Dashboard() {
   const [llmInfo, setLlmInfo] = useState<{ configured: boolean; apiKeyMasked: string | null; baseUrl: string; model: string; presets?: Array<{ label: string; baseUrl: string; model: string }> } | null>(null)
   const [showLlmKey, setShowLlmKey] = useState(false)
   const [savingLlm, setSavingLlm] = useState(false)
+  const [testingLlm, setTestingLlm] = useState(false)
   const socketRef = useRef<Socket | null>(null)
   const feedIdRef = useRef(0)
   const fishAudioRef = useRef<HTMLAudioElement | null>(null)
@@ -385,6 +386,31 @@ export default function Dashboard() {
       toast({ title: 'فشل الاتصال', variant: 'destructive' })
     } finally {
       setSavingLlm(false)
+    }
+  }
+
+  async function testLlm() {
+    if (testingLlm) return
+    setTestingLlm(true)
+    try {
+      const res = await fetch('/api/settings/llm/test', {
+        method: 'POST',
+        headers: { ...authHeaders(auth), 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      const data = await res.json()
+      if (data?.ok) {
+        toast({
+          title: 'الدماغ شغالة تمام',
+          description: `الموديل ${data.model} رد في ${(data.ms / 1000).toFixed(1)} ثانية: «${(data.reply || '').slice(0, 50)}»`,
+        })
+      } else {
+        toast({ title: 'الدماغ مش شغالة', description: data?.error || 'راجع المفتاح أو اسم الموديل', variant: 'destructive' })
+      }
+    } catch {
+      toast({ title: 'فشل الاتصال', variant: 'destructive' })
+    } finally {
+      setTestingLlm(false)
     }
   }
 
@@ -820,6 +846,12 @@ export default function Dashboard() {
                   {llmInfo?.configured && (
                     <Button onClick={() => saveLlm(true)} disabled={savingLlm} variant="outline" className="h-11 rounded-xl">
                       مسح المفتاح
+                    </Button>
+                  )}
+                  {llmInfo?.configured && (
+                    <Button onClick={testLlm} disabled={testingLlm} variant="outline" className="h-11 rounded-xl">
+                      {testingLlm ? <RefreshCw className="w-4 h-4 ml-2 animate-spin" /> : <FlaskConical className="w-4 h-4 ml-2" />}
+                      اختبر الدماغ
                     </Button>
                   )}
                   <span className="text-xs text-zinc-400 font-mono" dir="ltr">

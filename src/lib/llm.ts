@@ -81,7 +81,7 @@ export async function resolveLLM(userId: string): Promise<LLMConfig | null> {
   return null
 }
 
-function chatHeaders(cfg: LLMConfig): Record<string, string> {
+export function chatHeaders(cfg: LLMConfig): Record<string, string> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     Authorization: `Bearer ${cfg.apiKey}`,

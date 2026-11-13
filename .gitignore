@@ -46,7 +46,8 @@ local-*
 *.log
 dev.log
 dev.out.log
-test
+# root-level scratch items only — do NOT ignore src/app/api/**/test route folders
+/test
 prompt
 
 server.log
